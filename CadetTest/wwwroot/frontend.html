@@ -1,10 +1,162 @@
-﻿<!DOCTYPE html>
-<html>
+<!DOCTYPE html>
+<html lang="tr">
 <head>
     <meta charset="utf-8" />
-    <title>Frontend</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Consents</title>
+    <style>
+        * { box-sizing: border-box; }
+        body { margin: 0; font-family: "Segoe UI", Arial, sans-serif; font-size: 14px; color: #1f2933; background: #f5f7fa; }
+        header { position: sticky; top: 0; z-index: 2; display: flex; align-items: center; gap: 16px; padding: 12px 24px; background: #fff; border-bottom: 1px solid #dde3ea; }
+        h1 { margin: 0; font-size: 18px; }
+        #status { flex: 1; color: #52606d; }
+        #status.error { color: #c0392b; }
+        main { padding: 16px 24px; }
+        table { width: 100%; border-collapse: collapse; background: #fff; border: 1px solid #dde3ea; }
+        th, td { padding: 6px 10px; text-align: left; border-bottom: 1px solid #edf0f3; }
+        th { position: sticky; top: 57px; background: #eef2f6; font-weight: 600; }
+        .id { width: 70px; text-align: right; }
+        tr.time-row td { background: #fff8e1; color: #8a6d00; font-family: Consolas, monospace; font-size: 12px; padding: 3px 10px; }
+    </style>
 </head>
 <body>
-    <h1>Frontend</h1>
+    <header>
+        <h1>Consents</h1>
+        <span id="status">Hazırlanıyor...</span>
+    </header>
+    <main>
+        <table>
+            <thead>
+                <tr>
+                    <th class="id">Id</th>
+                    <th>Type</th>
+                    <th>Recipient</th>
+                    <th>Status</th>
+                    <th>RecipientType</th>
+                </tr>
+            </thead>
+            <tbody id="consents"></tbody>
+        </table>
+    </main>
+
+    <script>
+        const API = '/api';
+        // Program.cs'teki ilk kullanici
+        const CREDENTIALS = {
+            username: 'User-5E638711-2D64-47B0-A8F5-1C5A9EADA966',
+            password: 'Pass-E4A679C7-2F4B-40AE-9DC8-C967EF7215AE'
+        };
+        const PAGE_SIZE = 10;
+
+        const tbody = document.getElementById('consents');
+        const statusEl = document.getElementById('status');
+
+        let token = null;
+
+        // ---------- API ----------
+
+        async function authenticate() {
+            const response = await fetch(`${API}/User/authenticate`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(CREDENTIALS)
+            });
+            if (!response.ok) throw new Error('Giriş yapılamadı.');
+
+            const data = await response.json();
+            token = data.jwtToken;
+        }
+
+        function sendRequest(path, method, body) {
+            return fetch(API + path, {
+                method: method,
+                headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+                body: body ? JSON.stringify(body) : undefined
+            });
+        }
+
+        // butun istekler buradan gider
+        async function apiFetch(path, method, body) {
+            if (!token) await authenticate();
+
+            let response = await sendRequest(path, method, body);
+
+            // token 5 dk'da bitiyor: yeniden giris yapip bir kez daha dene
+            if (response.status === 401) {
+                await authenticate();
+                response = await sendRequest(path, method, body);
+            }
+
+            if (!response.ok) throw new Error(`İstek başarısız (${response.status}).`);
+            return response.json();
+        }
+
+        // ---------- Tablo ----------
+
+        function createRow(consent) {
+            const tr = document.createElement('tr');
+            for (let i = 0; i < 5; i++) tr.insertCell();
+            tr.cells[0].className = 'id';
+
+            fillRow(tr, consent);
+            return tr;
+        }
+
+        function fillRow(tr, consent) {
+            tr.dataset.id = consent.id;
+            tr.cells[0].textContent = consent.id;
+            tr.cells[1].textContent = consent.type;
+            tr.cells[2].textContent = consent.recipient;
+            tr.cells[3].textContent = consent.status;
+            tr.cells[4].textContent = consent.recipientType;
+        }
+
+        function createTimeRow() {
+            const tr = document.createElement('tr');
+            tr.className = 'time-row';
+            for (let i = 0; i < 5; i++) tr.insertCell();
+            tr.cells[2].textContent = currentTime(); // Recipient kolonu
+            return tr;
+        }
+
+        // paketler milisaniyeler arayla geliyor, o yuzden ms de yaziliyor
+        function currentTime() {
+            const now = new Date();
+            const ms = String(now.getMilliseconds()).padStart(3, '0');
+            return `${now.toLocaleTimeString('tr-TR')}.${ms}`;
+        }
+
+        function setStatus(text, isError = false) {
+            statusEl.textContent = text;
+            statusEl.classList.toggle('error', isError);
+        }
+
+        // ---------- Faz 1: kayitlari 10'ar 10'ar oku ----------
+
+        async function loadAll() {
+            let startId = 1;
+            let total = 0;
+
+            while (true) {
+                const consents = await apiFetch('/Consents', 'POST', { startId: startId, count: PAGE_SIZE });
+                if (consents.length === 0) break;
+
+                // her satir en uste eklenir, boylece en kucuk Id en altta kalir
+                for (const consent of consents) {
+                    tbody.prepend(createRow(consent));
+                }
+                tbody.prepend(createTimeRow());
+
+                total += consents.length;
+                // +10 degil, son Id + 1 (arada silinmis kayit olabilir)
+                startId = consents[consents.length - 1].id + 1;
+                setStatus(`${total} kayıt yükleniyor...`);
+            }
+
+            setStatus(`${total} kayıt yüklendi.`);
+        }
+
+        loadAll().catch(error => setStatus(error.message, true));
+    </script>
 </body>
 </html>
