@@ -1,5 +1,7 @@
 using CadetTest.Entities;
 using CadetTest.Helpers;
+using CadetTest.Models;
+using Microsoft.EntityFrameworkCore;
 using System.Text;
 
 namespace CadetTest.Services
@@ -8,6 +10,10 @@ namespace CadetTest.Services
     {
         string GetRandomString(int stringLength);
         List<Consent> GetRangeById(int id, int adet);
+        Task<Consent> GetByIdAsync(int id);
+        Task<Consent> CreateAsync(ConsentSaveRequest request);
+        Task<Consent> UpdateAsync(int id, ConsentSaveRequest request);
+        Task<bool> DeleteAsync(int id);
     }
     public class DataService : IDataService
     {
@@ -26,6 +32,44 @@ namespace CadetTest.Services
             return cevap;
         }
 
+        public async Task<Consent> GetByIdAsync(int id)
+        {
+            return await _context.Consents.AsNoTracking().FirstOrDefaultAsync(k => k.Id == id);
+        }
+
+        public async Task<Consent> CreateAsync(ConsentSaveRequest request)
+        {
+            var consent = new Consent();
+            CopyFields(request, consent);
+
+            _context.Consents.Add(consent);
+            await _context.SaveChangesAsync();
+
+            return consent;
+        }
+
+        public async Task<Consent> UpdateAsync(int id, ConsentSaveRequest request)
+        {
+            var consent = await _context.Consents.FirstOrDefaultAsync(k => k.Id == id);
+            if (consent == null) return null;
+
+            CopyFields(request, consent);
+            await _context.SaveChangesAsync();
+
+            return consent;
+        }
+
+        public async Task<bool> DeleteAsync(int id)
+        {
+            var consent = await _context.Consents.FirstOrDefaultAsync(k => k.Id == id);
+            if (consent == null) return false;
+
+            _context.Consents.Remove(consent);
+            await _context.SaveChangesAsync();
+
+            return true;
+        }
+
         public string GetRandomString(int stringLength)
         {
             var sb = new StringBuilder();
@@ -36,6 +80,17 @@ namespace CadetTest.Services
             }
 
             return sb.ToString(0, stringLength);
+        }
+        #endregion
+
+        #region Private Methods
+
+        private static void CopyFields(ConsentSaveRequest request, Consent consent)
+        {
+            consent.Type = request.Type;
+            consent.Recipient = request.Recipient.Trim();
+            consent.Status = request.Status;
+            consent.RecipientType = request.RecipientType;
         }
         #endregion
     }
