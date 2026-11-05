@@ -16,13 +16,31 @@
         th, td { padding: 6px 10px; text-align: left; border-bottom: 1px solid #edf0f3; }
         th { position: sticky; top: 57px; background: #eef2f6; font-weight: 600; }
         .id { width: 70px; text-align: right; }
+        .actions { width: 140px; white-space: nowrap; }
         tr.time-row td { background: #fff8e1; color: #8a6d00; font-family: Consolas, monospace; font-size: 12px; padding: 3px 10px; }
+
+        button { font: inherit; padding: 5px 12px; border: 1px solid #c3ccd5; border-radius: 4px; background: #fff; color: #1f2933; cursor: pointer; }
+        button:hover { background: #eef2f6; }
+        button:disabled { opacity: 0.5; cursor: not-allowed; }
+        button.primary { background: #2563eb; border-color: #2563eb; color: #fff; }
+        button.danger { background: #c0392b; border-color: #c0392b; color: #fff; }
+        td.actions button { padding: 2px 8px; font-size: 12px; margin-right: 4px; }
+
+        .overlay { position: fixed; inset: 0; z-index: 10; display: flex; align-items: center; justify-content: center; background: rgba(15, 23, 42, 0.45); }
+        .overlay[hidden] { display: none; }
+        .modal { width: 420px; max-width: calc(100% - 32px); padding: 20px; background: #fff; border-radius: 8px; }
+        .modal h2 { margin: 0 0 16px; font-size: 16px; }
+        .modal label { display: block; margin-bottom: 12px; font-weight: 600; }
+        .modal input, .modal select { display: block; width: 100%; margin-top: 4px; padding: 6px 8px; font: inherit; font-weight: normal; border: 1px solid #c3ccd5; border-radius: 4px; }
+        .modal .buttons { display: flex; justify-content: flex-end; gap: 8px; margin-top: 16px; }
+        .modal .error { min-height: 1em; margin: 0; color: #c0392b; }
     </style>
 </head>
 <body>
     <header>
         <h1>Consents</h1>
         <span id="status">Hazırlanıyor...</span>
+        <button id="new-button" class="primary" disabled>Yeni Kayıt</button>
     </header>
     <main>
         <table>
@@ -33,11 +51,59 @@
                     <th>Recipient</th>
                     <th>Status</th>
                     <th>RecipientType</th>
+                    <th class="actions">İşlemler</th>
                 </tr>
             </thead>
             <tbody id="consents"></tbody>
         </table>
     </main>
+
+    <!-- ekleme / guncelleme formu -->
+    <div id="form-modal" class="overlay" hidden>
+        <form id="consent-form" class="modal">
+            <h2 id="form-title"></h2>
+            <label>Type
+                <select name="type">
+                    <option>EPOSTA</option>
+                    <option>MESAJ</option>
+                    <option>ARAMA</option>
+                </select>
+            </label>
+            <label>Recipient
+                <input name="recipient" required maxlength="254" />
+            </label>
+            <label>Status
+                <select name="status">
+                    <option>ONAY</option>
+                    <option>RET</option>
+                </select>
+            </label>
+            <label>RecipientType
+                <select name="recipientType">
+                    <option>BIREYSEL</option>
+                    <option>TACIR</option>
+                </select>
+            </label>
+            <p id="form-error" class="error"></p>
+            <div class="buttons">
+                <button type="button" id="form-cancel">Vazgeç</button>
+                <button type="submit" id="save-button" class="primary">Kaydet</button>
+            </div>
+        </form>
+    </div>
+
+    <!-- silme onayi -->
+    <div id="confirm-modal" class="overlay" hidden>
+        <div class="modal">
+            <h2>Kaydı sil</h2>
+            <p id="confirm-text"></p>
+            <p id="confirm-error" class="error"></p>
+            <div class="buttons">
+                <button type="button" id="confirm-cancel">Vazgeç</button>
+                <button type="button" id="confirm-button" class="danger">Sil</button>
+            </div>
+        </div>
+    </div>
 
     <script>
         const API = '/api';
@@ -50,8 +116,20 @@
 
         const tbody = document.getElementById('consents');
         const statusEl = document.getElementById('status');
+        const newButton = document.getElementById('new-button');
+        const formModal = document.getElementById('form-modal');
+        const form = document.getElementById('consent-form');
+        const formTitle = document.getElementById('form-title');
+        const formError = document.getElementById('form-error');
+        const saveButton = document.getElementById('save-button');
+        const confirmModal = document.getElementById('confirm-modal');
+        const confirmText = document.getElementById('confirm-text');
+        const confirmError = document.getElementById('confirm-error');
+        const confirmButton = document.getElementById('confirm-button');
 
         let token = null;
+        let editingRow = null;  // null ise form yeni kayit icin acik
+        let deletingRow = null;
 
         // ---------- API ----------
 
@@ -87,7 +165,12 @@
                 response = await sendRequest(path, method, body);
             }
 
+            if (response.status === 400) throw new Error('Girilen bilgiler geçersiz.');
+            if (response.status === 404) throw new Error('Kayıt bulunamadı, silinmiş olabilir.');
             if (!response.ok) throw new Error(`İstek başarısız (${response.status}).`);
+
+            // silmede cevap govdesi yok
+            if (response.status === 204) return null;
             return response.json();
         }
 
@@ -95,13 +178,19 @@
 
         function createRow(consent) {
             const tr = document.createElement('tr');
-            for (let i = 0; i < 5; i++) tr.insertCell();
+            for (let i = 0; i < 6; i++) tr.insertCell();
             tr.cells[0].className = 'id';
+            tr.cells[5].className = 'actions';
+            tr.cells[5].append(
+                createButton('Düzenle', () => openForm(tr)),
+                createButton('Sil', () => openConfirm(tr))
+            );
 
             fillRow(tr, consent);
             return tr;
         }
 
+        // guncellemede de kullaniliyor
         function fillRow(tr, consent) {
             tr.dataset.id = consent.id;
             tr.cells[0].textContent = consent.id;
@@ -111,10 +200,18 @@
             tr.cells[4].textContent = consent.recipientType;
         }
 
+        function createButton(text, onClick) {
+            const button = document.createElement('button');
+            button.type = 'button';
+            button.textContent = text;
+            button.addEventListener('click', onClick);
+            return button;
+        }
+
         function createTimeRow() {
             const tr = document.createElement('tr');
             tr.className = 'time-row';
-            for (let i = 0; i < 5; i++) tr.insertCell();
+            for (let i = 0; i < 6; i++) tr.insertCell();
             tr.cells[2].textContent = currentTime(); // Recipient kolonu
             return tr;
         }
@@ -154,7 +251,81 @@
             }
 
             setStatus(`${total} kayıt yüklendi.`);
+            // yukleme bitmeden eklenen kayit donguye de girip iki kez gorunurdu
+            newButton.disabled = false;
         }
+
+        // ---------- Faz 2: ekle / guncelle / sil ----------
+
+        function openForm(tr) {
+            editingRow = tr;
+            formError.textContent = '';
+
+            if (tr) {
+                formTitle.textContent = `Kaydı güncelle (Id ${tr.dataset.id})`;
+                form.elements.type.value = tr.cells[1].textContent;
+                form.elements.recipient.value = tr.cells[2].textContent;
+                form.elements.status.value = tr.cells[3].textContent;
+                form.elements.recipientType.value = tr.cells[4].textContent;
+            } else {
+                formTitle.textContent = 'Yeni kayıt';
+                form.reset();
+            }
+
+            formModal.hidden = false;
+        }
+
+        function openConfirm(tr) {
+            deletingRow = tr;
+            confirmError.textContent = '';
+            confirmText.textContent = `Id ${tr.dataset.id} silinecek. Emin misiniz?`;
+            confirmModal.hidden = false;
+        }
+
+        form.addEventListener('submit', async event => {
+            event.preventDefault(); // form sayfayi yenilemesin
+
+            const data = {
+                type: form.elements.type.value,
+                recipient: form.elements.recipient.value,
+                status: form.elements.status.value,
+                recipientType: form.elements.recipientType.value
+            };
+
+            saveButton.disabled = true; // cift tiklamada iki kayit olusmasin
+            try {
+                if (editingRow) {
+                    const consent = await apiFetch(`/Consents/${editingRow.dataset.id}`, 'PUT', data);
+                    fillRow(editingRow, consent);
+                    setStatus(`Id ${consent.id} güncellendi.`);
+                } else {
+                    const consent = await apiFetch('/Consents/create', 'POST', data);
+                    // yeni kaydin Id'si en buyuk, en uste
+                    tbody.prepend(createRow(consent));
+                    setStatus(`Id ${consent.id} eklendi.`);
+                }
+                formModal.hidden = true;
+            } catch (error) {
+                formError.textContent = error.message;
+            } finally {
+                saveButton.disabled = false;
+            }
+        });
+
+        confirmButton.addEventListener('click', async () => {
+            try {
+                await apiFetch(`/Consents/${deletingRow.dataset.id}`, 'DELETE');
+                setStatus(`Id ${deletingRow.dataset.id} silindi.`);
+                deletingRow.remove();
+                confirmModal.hidden = true;
+            } catch (error) {
+                confirmError.textContent = error.message;
+            }
+        });
+
+        newButton.addEventListener('click', () => openForm(null));
+        document.getElementById('form-cancel').addEventListener('click', () => { formModal.hidden = true; });
+        document.getElementById('confirm-cancel').addEventListener('click', () => { confirmModal.hidden = true; });
 
         loadAll().catch(error => setStatus(error.message, true));
     </script>
